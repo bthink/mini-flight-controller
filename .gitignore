@@ -1,0 +1,19 @@
+
+
+# ESP-IDF / PlatformIO build artifacts
+build/
+sdkconfig
+sdkconfig.old
+*.bin
+*.elf
+*.map
+*.log
+
+# Python virtual env
+.python_env/
+.env/
+.vscode/
+
+# IDE
+.idea/
+*.code-workspace
