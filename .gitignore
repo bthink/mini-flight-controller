@@ -17,3 +17,6 @@ sdkconfig.old
 # IDE
 .idea/
 *.code-workspace
+
+.DS_Store
+.cursor/
