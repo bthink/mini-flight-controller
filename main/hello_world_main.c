@@ -82,6 +82,10 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
+    
+    // Rotate display 90 degrees
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, false));
 
     // Initialize LCD backlight
     gpio_config_t bk_gpio_config = {
@@ -98,18 +102,18 @@ void app_main(void)
     lv_init();
 
     // Allocate two buffers for LVGL drawing
-    buf1 = heap_caps_malloc(LCD_H_RES * 20 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    buf1 = heap_caps_malloc(LCD_V_RES * 20 * sizeof(lv_color_t), MALLOC_CAP_DMA);
     assert(buf1);
-    buf2 = heap_caps_malloc(LCD_H_RES * 20 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    buf2 = heap_caps_malloc(LCD_V_RES * 20 * sizeof(lv_color_t), MALLOC_CAP_DMA);
     assert(buf2);
 
     // Initialize LVGL draw buffers
-    lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_H_RES * 20);
+    lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_V_RES * 20);
 
     // Register display driver to LVGL
     lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = LCD_H_RES;
-    disp_drv.ver_res = LCD_V_RES;
+    disp_drv.hor_res = LCD_V_RES;  // Swap resolution due to rotation
+    disp_drv.ver_res = LCD_H_RES;
     disp_drv.flush_cb = lvgl_flush_cb;
     disp_drv.draw_buf = &disp_buf;
     disp_drv.user_data = panel_handle;
@@ -120,7 +124,7 @@ void app_main(void)
 
     // Create a label and set its text
     lv_obj_t *label = lv_label_create(lv_scr_act());
-    lv_label_set_text(label, "HELLO");
+    lv_label_set_text(label, "HELLO WORLD");
     lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(label, lv_color_white(), 0);
     lv_obj_center(label);
