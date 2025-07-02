@@ -17,6 +17,33 @@ static lv_disp_drv_t disp_drv;         // Contains callback functions
 static lv_color_t *buf1 = NULL;
 static lv_color_t *buf2 = NULL;
 
+// ST7789 initialization commands
+typedef struct {
+    uint8_t cmd;
+    uint8_t data[16];
+    uint8_t data_bytes; //No of data in data; bit 7 = delay after set; 0xFF = end of cmds.
+} lcd_init_cmd_t;
+
+static const lcd_init_cmd_t st_init_cmds[] = {
+    {0x36, {0x70}, 1},
+    {0x3A, {0x05}, 1},
+    {0xB2, {0x0C, 0x0C, 0x00, 0x33, 0x33}, 5},
+    {0xB7, {0x35}, 1},
+    {0xBB, {0x19}, 1},
+    {0xC0, {0x2C}, 1},
+    {0xC2, {0x01}, 1},
+    {0xC3, {0x12}, 1},
+    {0xC4, {0x20}, 1},
+    {0xC6, {0x0F}, 1},
+    {0xD0, {0xA4, 0xA1}, 2},
+    {0xE0, {0xD0, 0x04, 0x0D, 0x11, 0x13, 0x2B, 0x3F, 0x54, 0x4C, 0x18, 0x0D, 0x0B, 0x1F, 0x23}, 14},
+    {0xE1, {0xD0, 0x04, 0x0C, 0x11, 0x13, 0x2C, 0x3F, 0x44, 0x51, 0x2F, 0x1F, 0x1F, 0x20, 0x23}, 14},
+    {0x21, {0}, 0},
+    {0x11, {0}, 0x80},
+    {0x29, {0}, 0x80},
+    {0, {0}, 0xff}
+};
+
 static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
     lv_disp_drv_t *disp_driver = (lv_disp_drv_t *)user_ctx;
@@ -32,6 +59,20 @@ static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
     int offsety1 = area->y1;
     int offsety2 = area->y2;
     esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
+}
+
+static void st7789_send_init_commands(esp_lcd_panel_io_handle_t io_handle)
+{
+    int cmd = 0;
+    const lcd_init_cmd_t* lcd_init_cmds = st_init_cmds;
+
+    while (lcd_init_cmds[cmd].data_bytes != 0xff) {
+        esp_lcd_panel_io_tx_param(io_handle, lcd_init_cmds[cmd].cmd, lcd_init_cmds[cmd].data, lcd_init_cmds[cmd].data_bytes & 0x7f);
+        if (lcd_init_cmds[cmd].data_bytes & 0x80) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        cmd++;
+    }
 }
 
 static void lvgl_tick_task(void *arg)
@@ -80,43 +121,53 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle));
 
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
-    ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
+    vTaskDelay(pdMS_TO_TICKS(100));
     
-    // Rotate display 90 degrees
+    // Send custom initialization commands
+    st7789_send_init_commands(io_handle);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    // Set display orientation and color mode
     ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, true));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, false));
-
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
+    
+    // Additional display configuration
+    ESP_ERROR_CHECK(esp_lcd_panel_set_gap(panel_handle, 0, 35));
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
     // Initialize LCD backlight
     gpio_config_t bk_gpio_config = {
         .pin_bit_mask = 1ULL << PIN_NUM_LCD_BL,
         .mode = GPIO_MODE_OUTPUT,
     };
     ESP_ERROR_CHECK(gpio_config(&bk_gpio_config));
-
+    
     // Turn on display and backlight
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+    vTaskDelay(pdMS_TO_TICKS(100));
     gpio_set_level(PIN_NUM_LCD_BL, LCD_BK_LIGHT_ON_LEVEL);
 
     // Initialize LVGL
     lv_init();
 
     // Allocate two buffers for LVGL drawing
-    buf1 = heap_caps_malloc(LCD_V_RES * 20 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    buf1 = heap_caps_malloc(LCD_V_RES * LCD_H_RES * sizeof(lv_color_t), MALLOC_CAP_DMA);
     assert(buf1);
-    buf2 = heap_caps_malloc(LCD_V_RES * 20 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    buf2 = heap_caps_malloc(LCD_V_RES * LCD_H_RES * sizeof(lv_color_t), MALLOC_CAP_DMA);
     assert(buf2);
 
     // Initialize LVGL draw buffers
-    lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_V_RES * 20);
+    lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_V_RES * LCD_H_RES);
 
     // Register display driver to LVGL
     lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = LCD_V_RES;  // Swap resolution due to rotation
+    disp_drv.hor_res = LCD_V_RES;
     disp_drv.ver_res = LCD_H_RES;
     disp_drv.flush_cb = lvgl_flush_cb;
     disp_drv.draw_buf = &disp_buf;
     disp_drv.user_data = panel_handle;
+    disp_drv.full_refresh = 1;
     lv_disp_drv_register(&disp_drv);
 
     // Create a task to handle LVGL ticks
@@ -133,6 +184,6 @@ void app_main(void)
 
     while (1) {
         lv_timer_handler();
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }

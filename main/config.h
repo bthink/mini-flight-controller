@@ -10,13 +10,11 @@
 #define PIN_NUM_LCD_CS        14  // LCD CS
 #define PIN_NUM_LCD_BL        22  // LCD Backlight
 
-// RGB LED Pins
-#define PIN_LED_R             3   // Red LED
-#define PIN_LED_G             4   // Green LED
-#define PIN_LED_B             5   // Blue LED
+// RGB LED Pin
+#define PIN_RGB_LED           8   // RGB LED Control
 
 // LCD Configuration
-#define LCD_PIXEL_CLOCK_HZ    (10 * 1000 * 1000)
+#define LCD_PIXEL_CLOCK_HZ    (5 * 1000 * 1000)  // Reduced to 5MHz
 #define LCD_BK_LIGHT_ON_LEVEL  1
 #define LCD_BK_LIGHT_OFF_LEVEL !LCD_BK_LIGHT_ON_LEVEL
 #define LCD_H_RES             172
