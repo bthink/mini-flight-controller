@@ -7,6 +7,11 @@
 #include "esp_log.h"
 #include <math.h>
 
+// Define M_PI if not available
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 static const char *TAG = "rgb_led";
 
 static led_strip_handle_t led_strip = NULL;
@@ -37,16 +42,34 @@ esp_err_t rgb_led_init(void)
         .max_leds = 1, // Single RGB LED
     };
     
-    // Use RMT backend for LED strip
+    esp_err_t ret = ESP_FAIL;
+    
+    // Try RMT backend first
     led_strip_rmt_config_t rmt_config = {
         .resolution_hz = 10 * 1000 * 1000, // 10MHz
         .flags.with_dma = false,
     };
     
-    esp_err_t ret = led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip);
+    ret = led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create LED strip: %s", esp_err_to_name(ret));
-        return ret;
+        ESP_LOGW(TAG, "RMT backend failed, trying SPI backend");
+        
+        // Fallback to SPI backend if RMT fails
+        led_strip_spi_config_t spi_config = {
+            .spi_bus = SPI2_HOST, // Use SPI2 for RGB LED
+            .flags.with_dma = true,
+        };
+        
+        ret = led_strip_new_spi_device(&strip_config, &spi_config, &led_strip);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Both RMT and SPI backends failed: %s", esp_err_to_name(ret));
+            vSemaphoreDelete(rgb_mutex);
+            rgb_mutex = NULL;
+            return ret;
+        }
+        ESP_LOGI(TAG, "Using SPI backend for RGB LED");
+    } else {
+        ESP_LOGI(TAG, "Using RMT backend for RGB LED");
     }
     
     // Turn off LED initially
@@ -99,6 +122,11 @@ esp_err_t rgb_led_off(void)
 
 esp_err_t rgb_led_set_mode(rgb_led_mode_t mode, uint32_t period_ms)
 {
+    if (led_strip == NULL) {
+        ESP_LOGE(TAG, "LED strip not initialized, cannot set mode");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
     current_mode = mode;
     animation_period = period_ms;
     
@@ -129,6 +157,11 @@ esp_err_t rgb_led_stop(void)
     }
     
     return rgb_led_off();
+}
+
+bool rgb_led_is_initialized(void)
+{
+    return (led_strip != NULL && rgb_mutex != NULL);
 }
 
 static void rgb_led_task(void *pvParameters)

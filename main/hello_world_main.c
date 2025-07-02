@@ -19,7 +19,7 @@ static lv_color_t *buf1 = NULL;
 static lv_color_t *buf2 = NULL;
 
 // Demo counter for RGB LED effects
-static uint32_t demo_counter = 0;
+// static uint32_t demo_counter = 0; // Currently unused
 
 // Function declarations
 static void rgb_led_demo_task(void *pvParameters);
@@ -94,6 +94,13 @@ static void rgb_led_demo_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "RGB LED demo task started");
     
+    // Check if RGB LED is available
+    if (!rgb_led_is_initialized()) {
+        ESP_LOGW(TAG, "RGB LED not initialized, demo task exiting");
+        vTaskDelete(NULL);
+        return;
+    }
+    
     const rgb_led_mode_t demo_modes[] = {
         RGB_MODE_RAINBOW,
         RGB_MODE_BLINK, 
@@ -121,8 +128,13 @@ static void rgb_led_demo_task(void *pvParameters)
     while (1) {
         ESP_LOGI(TAG, "RGB LED Demo: %s mode for 10 seconds", mode_names[mode_index]);
         
-        // Set current mode
-        rgb_led_set_mode(demo_modes[mode_index], demo_periods[mode_index]);
+        // Set current mode (function handles null checks internally)
+        esp_err_t ret = rgb_led_set_mode(demo_modes[mode_index], demo_periods[mode_index]);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "RGB LED not available, demo task exiting");
+            vTaskDelete(NULL); // Delete this task
+            return;
+        }
         
         // Wait 10 seconds
         vTaskDelay(pdMS_TO_TICKS(10000));
@@ -233,14 +245,19 @@ void app_main(void)
     ESP_LOGI(TAG, "Display setup completed");
     
     // Initialize RGB LED
-    ESP_ERROR_CHECK(rgb_led_init());
-    ESP_LOGI(TAG, "RGB LED initialized");
-    
-    // Start with rainbow effect
-    ESP_ERROR_CHECK(rgb_led_set_mode(RGB_MODE_RAINBOW, 100));
-    
-    // Create a task for LED demo
-    xTaskCreate(rgb_led_demo_task, "rgb_demo", 4096, NULL, 3, NULL);
+    esp_err_t rgb_ret = rgb_led_init();
+    if (rgb_ret == ESP_OK) {
+        ESP_LOGI(TAG, "RGB LED initialized successfully");
+        
+        // Start with rainbow effect
+        rgb_led_set_mode(RGB_MODE_RAINBOW, 100);
+        
+        // Create a task for LED demo
+        xTaskCreate(rgb_led_demo_task, "rgb_demo", 4096, NULL, 3, NULL);
+    } else {
+        ESP_LOGE(TAG, "RGB LED initialization failed: %s", esp_err_to_name(rgb_ret));
+        ESP_LOGW(TAG, "Continuing without RGB LED functionality");
+    }
 
     while (1) {
         lv_timer_handler();

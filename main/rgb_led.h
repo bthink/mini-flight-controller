@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "esp_err.h"
+#include <stdbool.h>
 
 // RGB LED Colors
 typedef struct {
@@ -77,5 +78,12 @@ esp_err_t rgb_led_set_mode(rgb_led_mode_t mode, uint32_t period_ms);
  * @return esp_err_t ESP_OK on success
  */
 esp_err_t rgb_led_stop(void);
+
+/**
+ * @brief Check if RGB LED is initialized
+ * 
+ * @return bool true if initialized, false otherwise
+ */
+bool rgb_led_is_initialized(void);
 
 #endif // _RGB_LED_H_ 
