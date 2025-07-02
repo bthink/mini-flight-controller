@@ -10,6 +10,7 @@
 #include "lvgl.h"
 #include "config.h"
 #include "rgb_led.h"
+#include "wifi_manager.h"
 
 static const char *TAG = "lcd_example";
 
@@ -17,12 +18,14 @@ static lv_disp_draw_buf_t disp_buf;    // Contains internal graphic buffer(s)
 static lv_disp_drv_t disp_drv;         // Contains callback functions
 static lv_color_t *buf1 = NULL;
 static lv_color_t *buf2 = NULL;
+static lv_obj_t *status_label = NULL; // Label for WiFi status
 
 // Demo counter for RGB LED effects
 // static uint32_t demo_counter = 0; // Currently unused
 
 // Function declarations
 static void rgb_led_demo_task(void *pvParameters);
+static void update_display_status(void);
 
 // ST7789 initialization commands
 typedef struct {
@@ -144,6 +147,56 @@ static void rgb_led_demo_task(void *pvParameters)
     }
 }
 
+static void update_display_status(void)
+{
+    if (status_label == NULL) return;
+    
+    char status_text[256];
+    char ip_str[16];
+    int8_t rssi;
+    
+    wifi_status_t wifi_status = wifi_manager_get_status();
+    
+    switch (wifi_status) {
+        case WIFI_STATUS_CONNECTED:
+            if (wifi_manager_get_info(ip_str, &rssi) == ESP_OK) {
+                snprintf(status_text, sizeof(status_text), 
+                         "FLIGHT CONTROLLER\n"
+                         "WiFi: Connected\n"
+                         "IP: %s\n"
+                         "RSSI: %d dBm\n"
+                         "RGB LED Active", 
+                         ip_str, rssi);
+            } else {
+                snprintf(status_text, sizeof(status_text), 
+                         "FLIGHT CONTROLLER\n"
+                         "WiFi: Connected\n"
+                         "RGB LED Active");
+            }
+            break;
+        case WIFI_STATUS_CONNECTING:
+            snprintf(status_text, sizeof(status_text), 
+                     "FLIGHT CONTROLLER\n"
+                     "WiFi: Connecting...\n"
+                     "RGB LED Active");
+            break;
+        case WIFI_STATUS_FAILED:
+            snprintf(status_text, sizeof(status_text), 
+                     "FLIGHT CONTROLLER\n"
+                     "WiFi: Failed to connect\n"
+                     "RGB LED Active");
+            break;
+        default:
+            snprintf(status_text, sizeof(status_text), 
+                     "FLIGHT CONTROLLER\n"
+                     "WiFi: Disconnected\n"
+                     "RGB LED Active");
+            break;
+    }
+    
+    lv_label_set_text(status_label, status_text);
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Initialize SPI bus");
@@ -234,15 +287,27 @@ void app_main(void)
     // Create a task to handle LVGL ticks
     xTaskCreate(lvgl_tick_task, "lvgl_tick", 4096, NULL, 1, NULL);
 
-    // Create a label and set its text
-    lv_obj_t *label = lv_label_create(lv_scr_act());
-    lv_label_set_text(label, "FLIGHT CONTROLLER\nRGB LED Demo Active\nWatch the LED!");
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(label);
+    // Create a label for status display
+    status_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(status_label, "FLIGHT CONTROLLER\nInitializing...");
+    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(status_label, lv_color_white(), 0);
+    lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(status_label);
 
     ESP_LOGI(TAG, "Display setup completed");
+    
+    // Initialize WiFi
+    ESP_LOGI(TAG, "Initializing WiFi...");
+    esp_err_t wifi_ret = wifi_manager_init();
+    if (wifi_ret == ESP_OK) {
+        ESP_LOGI(TAG, "WiFi initialized successfully");
+    } else {
+        ESP_LOGE(TAG, "WiFi initialization failed: %s", esp_err_to_name(wifi_ret));
+    }
+    
+    // Update display with initial status
+    update_display_status();
     
     // Initialize RGB LED
     esp_err_t rgb_ret = rgb_led_init();
@@ -259,8 +324,17 @@ void app_main(void)
         ESP_LOGW(TAG, "Continuing without RGB LED functionality");
     }
 
+    uint32_t display_update_counter = 0;
     while (1) {
         lv_timer_handler();
+        
+        // Update display status every 2 seconds (400 * 5ms = 2000ms)
+        display_update_counter++;
+        if (display_update_counter >= 400) {
+            update_display_status();
+            display_update_counter = 0;
+        }
+        
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }

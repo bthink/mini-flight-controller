@@ -24,4 +24,10 @@
 #define LED_ON                0   // LED jest aktywny przy stanie niskim (0)
 #define LED_OFF               1   // LED jest wyłączony przy stanie wysokim (1)
 
+// WiFi Configuration - Now using Kconfig (menuconfig)
+#define WIFI_SSID             CONFIG_WIFI_SSID
+#define WIFI_PASSWORD         CONFIG_WIFI_PASSWORD
+#define WIFI_MAXIMUM_RETRY    CONFIG_WIFI_MAXIMUM_RETRY
+#define WIFI_TIMEOUT_MS       10000               // Connection timeout in milliseconds
+
 #endif // _CONFIG_H_ 

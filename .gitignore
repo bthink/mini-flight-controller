@@ -4,10 +4,16 @@
 build/
 sdkconfig
 sdkconfig.old
+sdkconfig.local
 *.bin
 *.elf
 *.map
 *.log
+
+# WiFi credentials and secrets
+wifi_credentials.h
+secrets.h
+config_local.h
 
 # Python virtual env
 .python_env/
