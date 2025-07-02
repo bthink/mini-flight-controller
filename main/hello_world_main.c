@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "config.h"
+#include "rgb_led.h"
 
 static const char *TAG = "lcd_example";
 
@@ -16,6 +17,12 @@ static lv_disp_draw_buf_t disp_buf;    // Contains internal graphic buffer(s)
 static lv_disp_drv_t disp_drv;         // Contains callback functions
 static lv_color_t *buf1 = NULL;
 static lv_color_t *buf2 = NULL;
+
+// Demo counter for RGB LED effects
+static uint32_t demo_counter = 0;
+
+// Function declarations
+static void rgb_led_demo_task(void *pvParameters);
 
 // ST7789 initialization commands
 typedef struct {
@@ -80,6 +87,48 @@ static void lvgl_tick_task(void *arg)
     while (1) {
         lv_tick_inc(portTICK_PERIOD_MS);
         vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+static void rgb_led_demo_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "RGB LED demo task started");
+    
+    const rgb_led_mode_t demo_modes[] = {
+        RGB_MODE_RAINBOW,
+        RGB_MODE_BLINK, 
+        RGB_MODE_BREATHE,
+        RGB_MODE_FLIGHT_STATUS
+    };
+    
+    const uint32_t demo_periods[] = {
+        100,  // Rainbow - fast
+        500,  // Blink - medium
+        150,  // Breathe - slow breathing
+        800   // Flight status - slower
+    };
+    
+    const char* mode_names[] = {
+        "Rainbow",
+        "Blink",
+        "Breathe", 
+        "Flight Status"
+    };
+    
+    uint8_t mode_index = 0;
+    const uint8_t num_modes = sizeof(demo_modes) / sizeof(demo_modes[0]);
+    
+    while (1) {
+        ESP_LOGI(TAG, "RGB LED Demo: %s mode for 10 seconds", mode_names[mode_index]);
+        
+        // Set current mode
+        rgb_led_set_mode(demo_modes[mode_index], demo_periods[mode_index]);
+        
+        // Wait 10 seconds
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        
+        // Move to next mode
+        mode_index = (mode_index + 1) % num_modes;
     }
 }
 
@@ -175,12 +224,23 @@ void app_main(void)
 
     // Create a label and set its text
     lv_obj_t *label = lv_label_create(lv_scr_act());
-    lv_label_set_text(label, "HELLO WORLD");
+    lv_label_set_text(label, "FLIGHT CONTROLLER\nRGB LED Demo Active\nWatch the LED!");
     lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(label, lv_color_white(), 0);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(label);
 
     ESP_LOGI(TAG, "Display setup completed");
+    
+    // Initialize RGB LED
+    ESP_ERROR_CHECK(rgb_led_init());
+    ESP_LOGI(TAG, "RGB LED initialized");
+    
+    // Start with rainbow effect
+    ESP_ERROR_CHECK(rgb_led_set_mode(RGB_MODE_RAINBOW, 100));
+    
+    // Create a task for LED demo
+    xTaskCreate(rgb_led_demo_task, "rgb_demo", 4096, NULL, 3, NULL);
 
     while (1) {
         lv_timer_handler();
