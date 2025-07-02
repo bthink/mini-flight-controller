@@ -20,3 +20,5 @@ sdkconfig.old
 
 .DS_Store
 .cursor/
+
+esp-idf/
