@@ -30,4 +30,18 @@
 #define WIFI_MAXIMUM_RETRY    CONFIG_WIFI_MAXIMUM_RETRY
 #define WIFI_TIMEOUT_MS       10000               // Connection timeout in milliseconds
 
+// Aircraft Tracker Configuration - Using Kconfig (menuconfig)
+#define TRACKER_LATITUDE      atof(CONFIG_TRACKER_LATITUDE)
+#define TRACKER_LONGITUDE     atof(CONFIG_TRACKER_LONGITUDE)
+#define TRACKER_RADIUS_KM     CONFIG_TRACKER_RADIUS_KM
+#define TRACKER_UPDATE_INTERVAL CONFIG_TRACKER_UPDATE_INTERVAL
+
+// OpenSky Network API (HTTPS)
+#define OPENSKY_API_URL       "https://opensky-network.org/api/states/all"
+
+// ADSB.FI API (HTTPS - requires SSL)
+#define ADSB_API_URL          "https://opendata.adsb.fi/api/v2/lat"
+#define MAX_AIRCRAFT_COUNT    20                  // Maximum aircraft to track
+#define HTTP_TIMEOUT_MS       10000               // HTTP request timeout
+
 #endif // _CONFIG_H_ 

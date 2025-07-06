@@ -27,7 +27,7 @@ static void breathe_effect(uint32_t step, rgb_color_t base_color);
 
 esp_err_t rgb_led_init(void)
 {
-    ESP_LOGI(TAG, "Initializing RGB LED on pin %d", PIN_RGB_LED);
+//     ESP_LOGI(TAG, "Initializing RGB LED on pin %d", PIN_RGB_LED);
     
     // Create mutex for thread safety
     rgb_mutex = xSemaphoreCreateMutex();
@@ -67,15 +67,15 @@ esp_err_t rgb_led_init(void)
             rgb_mutex = NULL;
             return ret;
         }
-        ESP_LOGI(TAG, "Using SPI backend for RGB LED");
+//         ESP_LOGI(TAG, "Using SPI backend for RGB LED");
     } else {
-        ESP_LOGI(TAG, "Using RMT backend for RGB LED");
+//         ESP_LOGI(TAG, "Using RMT backend for RGB LED");
     }
     
     // Turn off LED initially
     led_strip_clear(led_strip);
     
-    ESP_LOGI(TAG, "RGB LED initialized successfully");
+//     ESP_LOGI(TAG, "RGB LED initialized successfully");
     return ESP_OK;
 }
 
@@ -143,7 +143,7 @@ esp_err_t rgb_led_set_mode(rgb_led_mode_t mode, uint32_t period_ms)
             ESP_LOGE(TAG, "Failed to create RGB LED task");
             return ESP_ERR_NO_MEM;
         }
-        ESP_LOGI(TAG, "RGB LED mode set to %d with period %lu ms", mode, period_ms);
+//         ESP_LOGI(TAG, "RGB LED mode set to %d with period %lu ms", mode, period_ms);
     }
     
     return ESP_OK;
@@ -173,7 +173,7 @@ static void rgb_led_task(void *pvParameters)
     uint8_t color_index = 0;
     bool led_state = false;
     
-    ESP_LOGI(TAG, "RGB LED animation task started");
+//     ESP_LOGI(TAG, "RGB LED animation task started");
     
     while (1) {
         switch (current_mode) {

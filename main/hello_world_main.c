@@ -11,6 +11,7 @@
 #include "config.h"
 #include "rgb_led.h"
 #include "wifi_manager.h"
+#include "aircraft_tracker.h"
 
 static const char *TAG = "lcd_example";
 
@@ -95,11 +96,11 @@ static void lvgl_tick_task(void *arg)
 
 static void rgb_led_demo_task(void *pvParameters)
 {
-    ESP_LOGI(TAG, "RGB LED demo task started");
+    // ESP_LOGI(TAG, "RGB LED demo task started");
     
     // Check if RGB LED is available
     if (!rgb_led_is_initialized()) {
-        ESP_LOGW(TAG, "RGB LED not initialized, demo task exiting");
+        // ESP_LOGW(TAG, "RGB LED not initialized, demo task exiting");
         vTaskDelete(NULL);
         return;
     }
@@ -129,12 +130,12 @@ static void rgb_led_demo_task(void *pvParameters)
     const uint8_t num_modes = sizeof(demo_modes) / sizeof(demo_modes[0]);
     
     while (1) {
-        ESP_LOGI(TAG, "RGB LED Demo: %s mode for 10 seconds", mode_names[mode_index]);
+        // ESP_LOGI(TAG, "RGB LED Demo: %s mode for 10 seconds", mode_names[mode_index]);
         
         // Set current mode (function handles null checks internally)
         esp_err_t ret = rgb_led_set_mode(demo_modes[mode_index], demo_periods[mode_index]);
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "RGB LED not available, demo task exiting");
+            // ESP_LOGW(TAG, "RGB LED not available, demo task exiting");
             vTaskDelete(NULL); // Delete this task
             return;
         }
@@ -151,47 +152,101 @@ static void update_display_status(void)
 {
     if (status_label == NULL) return;
     
-    char status_text[256];
+    char status_text[512];
     char ip_str[16];
     int8_t rssi;
     
     wifi_status_t wifi_status = wifi_manager_get_status();
     
+    // Get aircraft data
+    aircraft_data_t aircraft_list[5];  // Show max 5 aircraft on screen
+    uint8_t aircraft_count = 0;
+    tracker_stats_t tracker_stats;
+    
+    if (aircraft_tracker_is_running()) {
+        aircraft_tracker_get_aircraft(aircraft_list, 5, &aircraft_count);
+        aircraft_tracker_get_stats(&tracker_stats);
+    }
+    
+    char wifi_info[128] = "";
     switch (wifi_status) {
         case WIFI_STATUS_CONNECTED:
             if (wifi_manager_get_info(ip_str, &rssi) == ESP_OK) {
-                snprintf(status_text, sizeof(status_text), 
-                         "FLIGHT CONTROLLER\n"
-                         "WiFi: Connected\n"
-                         "IP: %s\n"
-                         "RSSI: %d dBm\n"
-                         "RGB LED Active", 
-                         ip_str, rssi);
+                snprintf(wifi_info, sizeof(wifi_info), "WiFi: %s (%d dBm)", ip_str, rssi);
             } else {
-                snprintf(status_text, sizeof(status_text), 
-                         "FLIGHT CONTROLLER\n"
-                         "WiFi: Connected\n"
-                         "RGB LED Active");
+                snprintf(wifi_info, sizeof(wifi_info), "WiFi: Connected");
             }
             break;
         case WIFI_STATUS_CONNECTING:
-            snprintf(status_text, sizeof(status_text), 
-                     "FLIGHT CONTROLLER\n"
-                     "WiFi: Connecting...\n"
-                     "RGB LED Active");
+            snprintf(wifi_info, sizeof(wifi_info), "WiFi: Connecting...");
             break;
         case WIFI_STATUS_FAILED:
-            snprintf(status_text, sizeof(status_text), 
-                     "FLIGHT CONTROLLER\n"
-                     "WiFi: Failed to connect\n"
-                     "RGB LED Active");
+            snprintf(wifi_info, sizeof(wifi_info), "WiFi: Connection failed");
             break;
         default:
-            snprintf(status_text, sizeof(status_text), 
-                     "FLIGHT CONTROLLER\n"
-                     "WiFi: Disconnected\n"
-                     "RGB LED Active");
+            snprintf(wifi_info, sizeof(wifi_info), "WiFi: Disconnected");
             break;
+    }
+    
+    // Direction arrows for 8-direction compass
+    const char* direction_arrows[] = {"↑", "↗", "→", "↘", "↓", "↙", "←", "↖"};
+    
+    if (aircraft_tracker_is_running() && aircraft_count > 0) {
+        // Show aircraft tracker data
+        char aircraft_info[300] = "";
+        char temp_line[80];
+        
+        for (int i = 0; i < aircraft_count && i < 3; i++) {  // Show max 3 aircraft
+            const aircraft_data_t *ac = &aircraft_list[i];
+            
+            if (strlen(ac->callsign) > 0) {
+                snprintf(temp_line, sizeof(temp_line), "%s %s %.1fkm %s\n", 
+                         direction_arrows[ac->direction], 
+                         ac->callsign, 
+                         ac->distance_km,
+                         ac->on_ground ? "GND" : "AIR");
+            } else {
+                snprintf(temp_line, sizeof(temp_line), "%s %s %.1fkm %s\n", 
+                         direction_arrows[ac->direction], 
+                         ac->icao24, 
+                         ac->distance_km,
+                         ac->on_ground ? "GND" : "AIR");
+            }
+            
+            strncat(aircraft_info, temp_line, sizeof(aircraft_info) - strlen(aircraft_info) - 1);
+        }
+        
+        snprintf(status_text, sizeof(status_text), 
+                 "AIRCRAFT TRACKER\n"
+                 "%s\n"
+                 "Found %d aircraft:\n"
+                 "%s"
+                 "Requests: %d/%d", 
+                 wifi_info,
+                 aircraft_count,
+                 aircraft_info,
+                 (int)tracker_stats.successful_requests,
+                 (int)tracker_stats.total_requests);
+    } else if (aircraft_tracker_is_running()) {
+        // Tracker running but no aircraft
+        snprintf(status_text, sizeof(status_text), 
+                 "AIRCRAFT TRACKER\n"
+                 "%s\n"
+                 "Searching for aircraft...\n"
+                 "Radius: %d km\n"
+                 "Requests: %d/%d", 
+                 wifi_info,
+                 TRACKER_RADIUS_KM,
+                 (int)tracker_stats.successful_requests,
+                 (int)tracker_stats.total_requests);
+    } else {
+        // Tracker not running
+        snprintf(status_text, sizeof(status_text), 
+                 "FLIGHT CONTROLLER\n"
+                 "%s\n"
+                 "Aircraft tracker: OFF\n"
+                 "RGB LED Active", 
+                 wifi_info);
     }
     
     lv_label_set_text(status_label, status_text);
@@ -312,21 +367,78 @@ void app_main(void)
     // Initialize RGB LED
     esp_err_t rgb_ret = rgb_led_init();
     if (rgb_ret == ESP_OK) {
-        ESP_LOGI(TAG, "RGB LED initialized successfully");
+        // ESP_LOGI(TAG, "RGB LED initialized successfully");
         
-        // Start with rainbow effect
-        rgb_led_set_mode(RGB_MODE_RAINBOW, 100);
-        
-        // Create a task for LED demo
-        xTaskCreate(rgb_led_demo_task, "rgb_demo", 4096, NULL, 3, NULL);
+        // Start RGB LED demo task
+        xTaskCreate(rgb_led_demo_task, "rgb_led_demo_task", 2048, NULL, 5, NULL);
     } else {
         ESP_LOGE(TAG, "RGB LED initialization failed: %s", esp_err_to_name(rgb_ret));
         ESP_LOGW(TAG, "Continuing without RGB LED functionality");
     }
+    
+    // Initialize Aircraft Tracker
+    ESP_LOGI(TAG, "Initializing Aircraft Tracker...");
+    esp_err_t tracker_ret = aircraft_tracker_init();
+    if (tracker_ret == ESP_OK) {
+        ESP_LOGI(TAG, "Aircraft tracker initialized successfully");
+        
+        // Start aircraft tracking if WiFi is connected
+        wifi_status_t current_wifi_status = wifi_manager_get_status();
+        ESP_LOGI(TAG, "Current WiFi status: %d", current_wifi_status);
+        
+        if (current_wifi_status == WIFI_STATUS_CONNECTED) {
+            ESP_LOGI(TAG, "WiFi is connected, starting aircraft tracker immediately");
+            esp_err_t start_ret = aircraft_tracker_start();
+            if (start_ret == ESP_OK) {
+                ESP_LOGI(TAG, "Aircraft tracker started successfully");
+            } else {
+                ESP_LOGW(TAG, "Failed to start aircraft tracker: %s", esp_err_to_name(start_ret));
+            }
+        } else {
+            ESP_LOGI(TAG, "WiFi not connected yet (status=%d), aircraft tracker will start automatically when WiFi connects", current_wifi_status);
+        }
+    } else {
+        ESP_LOGE(TAG, "Aircraft tracker initialization failed: %s", esp_err_to_name(tracker_ret));
+        ESP_LOGW(TAG, "Continuing without aircraft tracking functionality");
+    }
 
     uint32_t display_update_counter = 0;
+    bool tracker_auto_started = false;
+    
     while (1) {
         lv_timer_handler();
+        
+        // Auto-start aircraft tracker when WiFi connects
+        wifi_status_t current_status = wifi_manager_get_status();
+        bool tracker_running = aircraft_tracker_is_running();
+        
+        if (!tracker_auto_started && 
+            current_status == WIFI_STATUS_CONNECTED && 
+            !tracker_running) {
+            
+            ESP_LOGI(TAG, "WiFi connected (status=%d), tracker_running=%d, starting aircraft tracker", current_status, tracker_running);
+            esp_err_t start_ret = aircraft_tracker_start();
+            if (start_ret == ESP_OK) {
+                ESP_LOGI(TAG, "Aircraft tracker auto-started successfully");
+                tracker_auto_started = true;
+            } else {
+                ESP_LOGW(TAG, "Failed to auto-start aircraft tracker: %s", esp_err_to_name(start_ret));
+            }
+        }
+        
+        // Debug info every 10 seconds (2000 * 5ms = 10s)
+        static uint32_t debug_counter = 0;
+        debug_counter++;
+        if (debug_counter >= 2000) {
+            ESP_LOGI(TAG, "DEBUG: WiFi status=%d, tracker_running=%d, auto_started=%d", 
+                     current_status, tracker_running, tracker_auto_started);
+            debug_counter = 0;
+        }
+        
+        // Reset auto-start flag if WiFi disconnects
+        if (tracker_auto_started && wifi_manager_get_status() != WIFI_STATUS_CONNECTED) {
+            tracker_auto_started = false;
+        }
         
         // Update display status every 2 seconds (400 * 5ms = 2000ms)
         display_update_counter++;

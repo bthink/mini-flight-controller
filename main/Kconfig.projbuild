@@ -18,4 +18,38 @@ menu "Flight Controller WiFi Configuration"
         help
             Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
 
+endmenu
+
+menu "Aircraft Tracker Configuration"
+
+    config TRACKER_LATITUDE
+        string "Your Latitude"
+        default "52.2298"
+        help
+            Your geographical latitude for aircraft search (decimal degrees).
+            Example: 52.2298 for Warsaw, Poland
+
+    config TRACKER_LONGITUDE
+        string "Your Longitude"
+        default "21.0118"
+        help
+            Your geographical longitude for aircraft search (decimal degrees).
+            Example: 21.0118 for Warsaw, Poland
+
+    config TRACKER_RADIUS_KM
+        int "Search radius in kilometers"
+        default 25
+        range 5 100
+        help
+            Radius for nearby aircraft search (5-100 km).
+            Larger radius = more aircraft but higher data usage.
+
+    config TRACKER_UPDATE_INTERVAL
+        int "Update interval in seconds"
+        default 30
+        range 10 300
+        help
+            How often to fetch new aircraft data (10-300 seconds).
+            OpenSky Network recommends minimum 10 seconds for anonymous users.
+
 endmenu 
