@@ -24,19 +24,19 @@ menu "Aircraft Tracker Configuration"
 
     config TRACKER_HOME_LAT
         string "Home latitude"
-        default "52.2297"
+        default "51.1079"
         help
             Latitude of your location used as center point for nearby aircraft search.
 
     config TRACKER_HOME_LON
         string "Home longitude"
-        default "21.0122"
+        default "17.0385"
         help
             Longitude of your location used as center point for nearby aircraft search.
 
     config TRACKER_RADIUS_KM
         int "Search radius (km)"
-        default 30
+        default 50
         help
             Search radius around your location.
 
