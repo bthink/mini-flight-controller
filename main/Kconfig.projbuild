@@ -18,4 +18,63 @@ menu "Flight Controller WiFi Configuration"
         help
             Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
 
-endmenu 
+endmenu
+
+menu "Aircraft Tracker Configuration"
+
+    config TRACKER_HOME_LAT
+        string "Home latitude"
+        default "51.1079"
+        help
+            Latitude of your location used as center point for nearby aircraft search.
+
+    config TRACKER_HOME_LON
+        string "Home longitude"
+        default "17.0385"
+        help
+            Longitude of your location used as center point for nearby aircraft search.
+
+    config TRACKER_RADIUS_KM
+        int "Search radius (km)"
+        default 20
+        help
+            Search radius around your location.
+
+    config TRACKER_REFRESH_SEC
+        int "Refresh interval (seconds)"
+        range 5 120
+        default 15
+        help
+            How often aircraft data should be refreshed from API.
+
+    config TRACKER_OPENSKY_USERNAME
+        string "OpenSky username (optional)"
+        default ""
+        help
+            Username for OpenSky API. Leave empty for anonymous mode.
+
+    config TRACKER_OPENSKY_PASSWORD
+        string "OpenSky password (optional)"
+        default ""
+        help
+            Password for OpenSky API. Leave empty for anonymous mode.
+
+    config TRACKER_OPENSKY_CLIENT_ID
+        string "OpenSky API client ID (OAuth2)"
+        default ""
+        help
+            OAuth2 client ID for OpenSky API client credentials flow.
+
+    config TRACKER_OPENSKY_CLIENT_SECRET
+        string "OpenSky API client secret (OAuth2)"
+        default ""
+        help
+            OAuth2 client secret for OpenSky API client credentials flow.
+
+    config TRACKER_OPENSKY_TOKEN_URL
+        string "OpenSky OAuth2 token URL"
+        default "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+        help
+            OAuth2 token endpoint used to obtain bearer token.
+
+endmenu

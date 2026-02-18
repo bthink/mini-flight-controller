@@ -1,5 +1,7 @@
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -8,6 +10,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "aircraft_tracker.h"
 #include "config.h"
 #include "rgb_led.h"
 #include "wifi_manager.h"
@@ -19,12 +22,18 @@ static lv_disp_drv_t disp_drv;         // Contains callback functions
 static lv_color_t *buf1 = NULL;
 static lv_color_t *buf2 = NULL;
 static lv_obj_t *status_label = NULL; // Label for WiFi status
+static SemaphoreHandle_t s_aircraft_mutex = NULL;
+static aircraft_info_t s_latest_aircraft = {0};
+static bool s_aircraft_data_ready = false;
+
+#define LVGL_DRAW_BUF_LINES 40
 
 // Demo counter for RGB LED effects
 // static uint32_t demo_counter = 0; // Currently unused
 
 // Function declarations
 static void rgb_led_demo_task(void *pvParameters);
+static void aircraft_tracker_task(void *pvParameters);
 static void update_display_status(void);
 
 // ST7789 initialization commands
@@ -85,14 +94,6 @@ static void st7789_send_init_commands(esp_lcd_panel_io_handle_t io_handle)
     }
 }
 
-static void lvgl_tick_task(void *arg)
-{
-    while (1) {
-        lv_tick_inc(portTICK_PERIOD_MS);
-        vTaskDelay(pdMS_TO_TICKS(1));
-    }
-}
-
 static void rgb_led_demo_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "RGB LED demo task started");
@@ -147,6 +148,30 @@ static void rgb_led_demo_task(void *pvParameters)
     }
 }
 
+static void aircraft_tracker_task(void *pvParameters)
+{
+    while (1) {
+        if (wifi_manager_is_connected()) {
+            aircraft_info_t info = {0};
+            esp_err_t ret = aircraft_tracker_fetch_nearest(&info);
+
+            if (s_aircraft_mutex != NULL && xSemaphoreTake(s_aircraft_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                if (ret == ESP_OK && info.valid) {
+                    s_latest_aircraft = info;
+                    s_aircraft_data_ready = true;
+                    ESP_LOGI(TAG, "Nearest aircraft: %s %.1f km alt %d m heading %d",
+                             info.callsign, info.distance_km, info.altitude_m, info.heading_deg);
+                } else {
+                    s_aircraft_data_ready = false;
+                    ESP_LOGI(TAG, "No nearby aircraft or API unavailable");
+                }
+                xSemaphoreGive(s_aircraft_mutex);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(TRACKER_REFRESH_SEC * 1000));
+    }
+}
+
 static void update_display_status(void)
 {
     if (status_label == NULL) return;
@@ -154,8 +179,16 @@ static void update_display_status(void)
     char status_text[256];
     char ip_str[16];
     int8_t rssi;
+    aircraft_info_t aircraft = {0};
+    bool aircraft_ready = false;
     
     wifi_status_t wifi_status = wifi_manager_get_status();
+
+    if (s_aircraft_mutex != NULL && xSemaphoreTake(s_aircraft_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        aircraft = s_latest_aircraft;
+        aircraft_ready = s_aircraft_data_ready;
+        xSemaphoreGive(s_aircraft_mutex);
+    }
     
     switch (wifi_status) {
         case WIFI_STATUS_CONNECTED:
@@ -164,33 +197,44 @@ static void update_display_status(void)
                          "FLIGHT CONTROLLER\n"
                          "WiFi: Connected\n"
                          "IP: %s\n"
-                         "RSSI: %d dBm\n"
-                         "RGB LED Active", 
+                         "RSSI: %d dBm\n", 
                          ip_str, rssi);
             } else {
                 snprintf(status_text, sizeof(status_text), 
                          "FLIGHT CONTROLLER\n"
-                         "WiFi: Connected\n"
-                         "RGB LED Active");
+                         "WiFi: Connected\n");
+            }
+            if (aircraft_ready && aircraft.valid) {
+                snprintf(status_text + strlen(status_text), sizeof(status_text) - strlen(status_text),
+                         "Aircraft: %s\n"
+                         "Dist: %.1f km Alt: %d m\n"
+                         "Head: %d deg",
+                         aircraft.callsign,
+                         aircraft.distance_km,
+                         aircraft.altitude_m,
+                         aircraft.heading_deg);
+            } else {
+                snprintf(status_text + strlen(status_text), sizeof(status_text) - strlen(status_text),
+                         "Aircraft: no data");
             }
             break;
         case WIFI_STATUS_CONNECTING:
             snprintf(status_text, sizeof(status_text), 
                      "FLIGHT CONTROLLER\n"
                      "WiFi: Connecting...\n"
-                     "RGB LED Active");
+                     "Aircraft: waiting");
             break;
         case WIFI_STATUS_FAILED:
             snprintf(status_text, sizeof(status_text), 
                      "FLIGHT CONTROLLER\n"
                      "WiFi: Failed to connect\n"
-                     "RGB LED Active");
+                     "Aircraft: unavailable");
             break;
         default:
             snprintf(status_text, sizeof(status_text), 
                      "FLIGHT CONTROLLER\n"
                      "WiFi: Disconnected\n"
-                     "RGB LED Active");
+                     "Aircraft: unavailable");
             break;
     }
     
@@ -265,14 +309,15 @@ void app_main(void)
     // Initialize LVGL
     lv_init();
 
-    // Allocate two buffers for LVGL drawing
-    buf1 = heap_caps_malloc(LCD_V_RES * LCD_H_RES * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    // Allocate two partial buffers for LVGL drawing
+    const size_t draw_buf_pixels = LCD_V_RES * LVGL_DRAW_BUF_LINES;
+    buf1 = heap_caps_malloc(draw_buf_pixels * sizeof(lv_color_t), MALLOC_CAP_DMA);
     assert(buf1);
-    buf2 = heap_caps_malloc(LCD_V_RES * LCD_H_RES * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    buf2 = heap_caps_malloc(draw_buf_pixels * sizeof(lv_color_t), MALLOC_CAP_DMA);
     assert(buf2);
 
     // Initialize LVGL draw buffers
-    lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_V_RES * LCD_H_RES);
+    lv_disp_draw_buf_init(&disp_buf, buf1, buf2, draw_buf_pixels);
 
     // Register display driver to LVGL
     lv_disp_drv_init(&disp_drv);
@@ -281,11 +326,7 @@ void app_main(void)
     disp_drv.flush_cb = lvgl_flush_cb;
     disp_drv.draw_buf = &disp_buf;
     disp_drv.user_data = panel_handle;
-    disp_drv.full_refresh = 1;
     lv_disp_drv_register(&disp_drv);
-
-    // Create a task to handle LVGL ticks
-    xTaskCreate(lvgl_tick_task, "lvgl_tick", 4096, NULL, 1, NULL);
 
     // Create a label for status display
     status_label = lv_label_create(lv_scr_act());
@@ -308,6 +349,13 @@ void app_main(void)
     
     // Update display with initial status
     update_display_status();
+
+    s_aircraft_mutex = xSemaphoreCreateMutex();
+    if (s_aircraft_mutex != NULL) {
+        xTaskCreate(aircraft_tracker_task, "aircraft_tracker", 16384, NULL, 2, NULL);
+    } else {
+        ESP_LOGE(TAG, "Failed to create aircraft tracker mutex");
+    }
     
     // Initialize RGB LED
     esp_err_t rgb_ret = rgb_led_init();
@@ -326,15 +374,21 @@ void app_main(void)
 
     uint32_t display_update_counter = 0;
     while (1) {
-        lv_timer_handler();
+        uint32_t wait_ms = lv_timer_handler();
+        if (wait_ms < 5) {
+            wait_ms = 5;
+        } else if (wait_ms > 20) {
+            wait_ms = 20;
+        }
         
-        // Update display status every 2 seconds (400 * 5ms = 2000ms)
-        display_update_counter++;
-        if (display_update_counter >= 400) {
+        // Update display status every ~2 seconds
+        display_update_counter += wait_ms;
+        if (display_update_counter >= 2000) {
             update_display_status();
             display_update_counter = 0;
         }
         
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelay(pdMS_TO_TICKS(wait_ms));
+        lv_tick_inc(wait_ms);
     }
 }
