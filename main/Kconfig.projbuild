@@ -36,7 +36,7 @@ menu "Aircraft Tracker Configuration"
 
     config TRACKER_RADIUS_KM
         int "Search radius (km)"
-        default 50
+        default 20
         help
             Search radius around your location.
 
