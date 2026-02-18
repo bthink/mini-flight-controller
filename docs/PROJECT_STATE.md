@@ -8,7 +8,8 @@
 - After WiFi connect, tracker fetches aircraft data from OpenSky.
 - LCD shows:
   - WiFi status
-  - nearest aircraft callsign, distance, altitude, heading
+  - nearest aircraft callsign, type, distance, altitude, heading
+  - best-effort route (origin/destination), when available
   - or `Aircraft: no data` when nothing is available.
 
 ## Implemented Components
@@ -19,6 +20,8 @@
     - OAuth2 client credentials flow (preferred)
     - Basic auth fallback (legacy)
   - Fetches `/api/states/all` with bbox from configured lat/lon/radius.
+  - Tries to enrich nearest aircraft with type/registration/route using `api.adsbdb.com`.
+  - Fallback route enrichment using OpenSky `/api/flights/aircraft`.
   - Filters out aircraft on ground (`on_ground == true`).
   - Selects nearest aircraft using haversine distance.
 - `main/hello_world_main.c`:
@@ -50,7 +53,7 @@
 
 ## Known Limitations
 - Source endpoint (`states/all`) does not provide aircraft model/type directly.
-- Route origin/destination is not available from `states/all`; requires additional lookup endpoints.
+- Type and route depend on third-party enrichment availability and may be missing.
 - Token is currently fetched per tracker cycle; no token cache yet.
 
 ## Security Notes

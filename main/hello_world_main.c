@@ -4,6 +4,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_vendor.h"
@@ -26,13 +27,22 @@ static SemaphoreHandle_t s_aircraft_mutex = NULL;
 static aircraft_info_t s_latest_aircraft = {0};
 static bool s_aircraft_data_ready = false;
 static bool s_led_aircraft_visible = false;
+static uint8_t s_backlight_percent = 255;
 
 #define LVGL_DRAW_BUF_LINES 40
+#define LCD_BACKLIGHT_FREQ_HZ 5000
+#define LCD_BACKLIGHT_TIMER LEDC_TIMER_0
+#define LCD_BACKLIGHT_MODE LEDC_LOW_SPEED_MODE
+#define LCD_BACKLIGHT_CHANNEL LEDC_CHANNEL_0
+#define LCD_BACKLIGHT_DUTY_RES LEDC_TIMER_10_BIT
+#define LCD_BACKLIGHT_PERCENT_IDLE 20
+#define LCD_BACKLIGHT_PERCENT_ACTIVE 100
 
 // Function declarations
 static void aircraft_tracker_task(void *pvParameters);
 static void update_display_status(void);
 static void update_aircraft_led(bool should_be_on);
+static void set_backlight_percent(uint8_t percent);
 
 // ST7789 initialization commands
 typedef struct {
@@ -131,6 +141,26 @@ static void update_aircraft_led(bool should_be_on)
     s_led_aircraft_visible = should_be_on;
 }
 
+static void set_backlight_percent(uint8_t percent)
+{
+    if (percent > 100) {
+        percent = 100;
+    }
+    if (percent == s_backlight_percent) {
+        return;
+    }
+
+    const uint32_t max_duty = (1U << LCD_BACKLIGHT_DUTY_RES) - 1U;
+    uint32_t duty = (max_duty * percent) / 100U;
+    if (LCD_BK_LIGHT_ON_LEVEL == 0) {
+        duty = max_duty - duty;
+    }
+
+    ledc_set_duty(LCD_BACKLIGHT_MODE, LCD_BACKLIGHT_CHANNEL, duty);
+    ledc_update_duty(LCD_BACKLIGHT_MODE, LCD_BACKLIGHT_CHANNEL);
+    s_backlight_percent = percent;
+}
+
 static void update_display_status(void)
 {
     if (status_label == NULL) return;
@@ -149,18 +179,40 @@ static void update_display_status(void)
     
     switch (wifi_status) {
         case WIFI_STATUS_CONNECTED:
-            snprintf(status_text, sizeof(status_text), "WiFi: Connected\n");
             if (aircraft_ready && aircraft.valid) {
-                snprintf(status_text + strlen(status_text), sizeof(status_text) - strlen(status_text),
+                char route_text[32];
+                char type_text[64];
+                const char *from = (aircraft.origin_airport[0] != '\0') ? aircraft.origin_airport : "?";
+                const char *to = (aircraft.destination_airport[0] != '\0') ? aircraft.destination_airport : "?";
+                if (aircraft.origin_airport[0] != '\0' || aircraft.destination_airport[0] != '\0') {
+                    snprintf(route_text, sizeof(route_text), "%s -> %s", from, to);
+                } else {
+                    snprintf(route_text, sizeof(route_text), "n/a");
+                }
+                if (aircraft.aircraft_type_name[0] != '\0' || aircraft.aircraft_type_code[0] != '\0') {
+                    snprintf(type_text, sizeof(type_text), "%s%s%s",
+                             aircraft.aircraft_type_code[0] ? aircraft.aircraft_type_code : "",
+                             (aircraft.aircraft_type_code[0] && aircraft.aircraft_type_name[0]) ? " " : "",
+                             aircraft.aircraft_type_name[0] ? aircraft.aircraft_type_name : "");
+                } else {
+                    snprintf(type_text, sizeof(type_text), "n/a");
+                }
+
+                snprintf(status_text, sizeof(status_text),
                          "Aircraft: %s\n"
+                         "Type: %s\n"
                          "Dist: %.1f km Alt: %d m\n"
-                         "Head: %d deg",
+                         "Head: %d deg\n"
+                         "Route: %s",
                          aircraft.callsign,
+                         type_text,
                          aircraft.distance_km,
                          aircraft.altitude_m,
-                         aircraft.heading_deg);
+                         aircraft.heading_deg,
+                         route_text);
             } else {
-                snprintf(status_text + strlen(status_text), sizeof(status_text) - strlen(status_text),
+                snprintf(status_text, sizeof(status_text),
+                         "WiFi: Connected\n"
                          "Aircraft: no data");
             }
             break;
@@ -188,6 +240,7 @@ static void update_display_status(void)
     );
 
     update_aircraft_led(aircraft_visible);
+    set_backlight_percent(aircraft_visible ? LCD_BACKLIGHT_PERCENT_ACTIVE : LCD_BACKLIGHT_PERCENT_IDLE);
 
     lv_label_set_text(status_label, status_text);
 }
@@ -245,17 +298,31 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(panel_handle, 0, 35));
     vTaskDelay(pdMS_TO_TICKS(100));
     
-    // Initialize LCD backlight
-    gpio_config_t bk_gpio_config = {
-        .pin_bit_mask = 1ULL << PIN_NUM_LCD_BL,
-        .mode = GPIO_MODE_OUTPUT,
+    // Initialize LCD backlight PWM
+    ledc_timer_config_t backlight_timer = {
+        .speed_mode = LCD_BACKLIGHT_MODE,
+        .timer_num = LCD_BACKLIGHT_TIMER,
+        .duty_resolution = LCD_BACKLIGHT_DUTY_RES,
+        .freq_hz = LCD_BACKLIGHT_FREQ_HZ,
+        .clk_cfg = LEDC_AUTO_CLK,
     };
-    ESP_ERROR_CHECK(gpio_config(&bk_gpio_config));
+    ESP_ERROR_CHECK(ledc_timer_config(&backlight_timer));
+
+    ledc_channel_config_t backlight_channel = {
+        .gpio_num = PIN_NUM_LCD_BL,
+        .speed_mode = LCD_BACKLIGHT_MODE,
+        .channel = LCD_BACKLIGHT_CHANNEL,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = LCD_BACKLIGHT_TIMER,
+        .duty = 0,
+        .hpoint = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&backlight_channel));
     
-    // Turn on display and backlight
+    // Turn on display and set initial backlight level
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
     vTaskDelay(pdMS_TO_TICKS(100));
-    gpio_set_level(PIN_NUM_LCD_BL, LCD_BK_LIGHT_ON_LEVEL);
+    set_backlight_percent(LCD_BACKLIGHT_PERCENT_IDLE);
 
     // Initialize LVGL
     lv_init();

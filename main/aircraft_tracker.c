@@ -1,6 +1,7 @@
 #include "aircraft_tracker.h"
 #include "config.h"
 #include <ctype.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +16,10 @@ static const char *TAG = "aircraft_tracker";
 
 #define RESP_BUF_SIZE 24576
 #define TOKEN_RESP_BUF_SIZE 4096
+#define FLIGHTS_RESP_BUF_SIZE 8192
+#define ADSBDB_RESP_BUF_SIZE 8192
 #define ACCESS_TOKEN_MAX_LEN 2048
+#define ENRICHMENT_CACHE_TTL_SEC 300
 #define DEG_TO_RAD (0.01745329251994329576923690768489)
 
 typedef struct {
@@ -23,6 +27,15 @@ typedef struct {
     size_t len;
     size_t cap;
 } http_resp_buf_t;
+
+typedef struct {
+    bool valid;
+    char icao24[16];
+    char callsign[16];
+    aircraft_info_t data;
+} enrichment_cache_t;
+
+static enrichment_cache_t s_enrichment_cache = {0};
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 {
@@ -87,6 +100,18 @@ static void trim_spaces(char *str)
     while (end >= str && isspace((unsigned char)*end)) {
         *end = '\0';
         end--;
+    }
+}
+
+static void copy_json_string(cJSON *obj, const char *key, char *out, size_t out_size)
+{
+    cJSON *item;
+    if (obj == NULL || key == NULL || out == NULL || out_size == 0) {
+        return;
+    }
+    item = cJSON_GetObjectItem(obj, key);
+    if (cJSON_IsString(item) && item->valuestring != NULL) {
+        snprintf(out, out_size, "%s", item->valuestring);
     }
 }
 
@@ -175,6 +200,29 @@ static esp_err_t http_get_oauth_token(char *token_out, size_t token_out_size)
     return ESP_OK;
 }
 
+static void set_auth_header_if_available(esp_http_client_handle_t client)
+{
+    if (strlen(TRACKER_OPENSKY_CLIENT_ID) > 0 && strlen(TRACKER_OPENSKY_CLIENT_SECRET) > 0) {
+        char access_token[ACCESS_TOKEN_MAX_LEN] = {0};
+        char auth_header[ACCESS_TOKEN_MAX_LEN + 16];
+        if (http_get_oauth_token(access_token, sizeof(access_token)) == ESP_OK) {
+            snprintf(auth_header, sizeof(auth_header), "Bearer %s", access_token);
+            esp_http_client_set_header(client, "Authorization", auth_header);
+        }
+    } else if (strlen(TRACKER_OPENSKY_USERNAME) > 0) {
+        char userpass[160];
+        unsigned char b64[240];
+        size_t b64_len = 0;
+        char auth_header[280];
+
+        snprintf(userpass, sizeof(userpass), "%s:%s", TRACKER_OPENSKY_USERNAME, TRACKER_OPENSKY_PASSWORD);
+        if (mbedtls_base64_encode(b64, sizeof(b64), &b64_len, (const unsigned char *)userpass, strlen(userpass)) == 0) {
+            snprintf(auth_header, sizeof(auth_header), "Basic %.*s", (int)b64_len, b64);
+            esp_http_client_set_header(client, "Authorization", auth_header);
+        }
+    }
+}
+
 static esp_err_t http_get_states(char *out_json, size_t out_size)
 {
     double lat = tracker_home_lat();
@@ -209,28 +257,7 @@ static esp_err_t http_get_states(char *out_json, size_t out_size)
         return ESP_FAIL;
     }
 
-    if (strlen(TRACKER_OPENSKY_CLIENT_ID) > 0 && strlen(TRACKER_OPENSKY_CLIENT_SECRET) > 0) {
-        char access_token[ACCESS_TOKEN_MAX_LEN] = {0};
-        char auth_header[ACCESS_TOKEN_MAX_LEN + 16];
-        esp_err_t token_err = http_get_oauth_token(access_token, sizeof(access_token));
-        if (token_err != ESP_OK) {
-            esp_http_client_cleanup(client);
-            return token_err;
-        }
-        snprintf(auth_header, sizeof(auth_header), "Bearer %s", access_token);
-        esp_http_client_set_header(client, "Authorization", auth_header);
-    } else if (strlen(TRACKER_OPENSKY_USERNAME) > 0) {
-        char userpass[160];
-        unsigned char b64[240];
-        size_t b64_len = 0;
-        char auth_header[280];
-
-        snprintf(userpass, sizeof(userpass), "%s:%s", TRACKER_OPENSKY_USERNAME, TRACKER_OPENSKY_PASSWORD);
-        if (mbedtls_base64_encode(b64, sizeof(b64), &b64_len, (const unsigned char *)userpass, strlen(userpass)) == 0) {
-            snprintf(auth_header, sizeof(auth_header), "Basic %.*s", (int)b64_len, b64);
-            esp_http_client_set_header(client, "Authorization", auth_header);
-        }
-    }
+    set_auth_header_if_available(client);
 
     esp_err_t err = esp_http_client_perform(client);
     if (err != ESP_OK) {
@@ -253,6 +280,284 @@ static esp_err_t http_get_states(char *out_json, size_t out_size)
     return ESP_OK;
 }
 
+static esp_err_t http_get_json(const char *url, char *out_json, size_t out_size)
+{
+    http_resp_buf_t resp = {
+        .buf = out_json,
+        .len = 0,
+        .cap = out_size,
+    };
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = 12000,
+        .event_handler = http_event_handler,
+        .user_data = &resp,
+        .buffer_size = 4096,
+        .buffer_size_tx = 2048,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (client == NULL) {
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK) {
+        esp_http_client_cleanup(client);
+        return err;
+    }
+
+    if (esp_http_client_get_status_code(client) != 200) {
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+
+    esp_http_client_cleanup(client);
+    return (resp.len > 0) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+}
+
+static esp_err_t http_get_flights_for_aircraft(const char *icao24, int64_t begin_unix, int64_t end_unix, char *out_json, size_t out_size)
+{
+    char url[256];
+    http_resp_buf_t resp = {
+        .buf = out_json,
+        .len = 0,
+        .cap = out_size,
+    };
+
+    snprintf(url, sizeof(url),
+             "https://opensky-network.org/api/flights/aircraft?icao24=%s&begin=%" PRId64 "&end=%" PRId64,
+             icao24, begin_unix, end_unix);
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = 12000,
+        .event_handler = http_event_handler,
+        .user_data = &resp,
+        .buffer_size = 4096,
+        .buffer_size_tx = 2048,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (client == NULL) {
+        return ESP_FAIL;
+    }
+    set_auth_header_if_available(client);
+
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK) {
+        esp_http_client_cleanup(client);
+        return err;
+    }
+
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    if (status != 200) {
+        return ESP_FAIL;
+    }
+
+    return (resp.len > 0) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+}
+
+static bool airport_or_empty(cJSON *item, char *out, size_t out_size)
+{
+    if (cJSON_IsString(item) && item->valuestring != NULL) {
+        snprintf(out, out_size, "%s", item->valuestring);
+        return out[0] != '\0';
+    }
+    out[0] = '\0';
+    return false;
+}
+
+static void fill_route_from_recent_flights(const char *icao24, const char *callsign, int64_t server_time_unix, aircraft_info_t *info)
+{
+    char *response = NULL;
+    cJSON *root = NULL;
+    bool prefer_callsign = false;
+    int64_t best_last_seen = -1;
+    char best_departure[8] = {0};
+    char best_arrival[8] = {0};
+    size_t i;
+
+    if (icao24 == NULL || icao24[0] == '\0' || server_time_unix <= 0 || info == NULL) {
+        return;
+    }
+
+    response = calloc(1, FLIGHTS_RESP_BUF_SIZE);
+    if (response == NULL) {
+        return;
+    }
+
+    if (http_get_flights_for_aircraft(icao24, server_time_unix - 21600, server_time_unix + 300, response, FLIGHTS_RESP_BUF_SIZE) != ESP_OK) {
+        free(response);
+        return;
+    }
+
+    root = cJSON_Parse(response);
+    free(response);
+    response = NULL;
+    if (!cJSON_IsArray(root)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    for (i = 0; i < (size_t)cJSON_GetArraySize(root); i++) {
+        cJSON *flight = cJSON_GetArrayItem(root, (int)i);
+        cJSON *dep = cJSON_GetObjectItem(flight, "estDepartureAirport");
+        cJSON *arr = cJSON_GetObjectItem(flight, "estArrivalAirport");
+        cJSON *last_seen_item = cJSON_GetObjectItem(flight, "lastSeen");
+        cJSON *flight_callsign_item = cJSON_GetObjectItem(flight, "callsign");
+        bool has_dep;
+        bool has_arr;
+        bool callsign_match = false;
+        int64_t last_seen = 0;
+        char dep_code[8] = {0};
+        char arr_code[8] = {0};
+
+        if (!cJSON_IsObject(flight)) {
+            continue;
+        }
+
+        has_dep = airport_or_empty(dep, dep_code, sizeof(dep_code));
+        has_arr = airport_or_empty(arr, arr_code, sizeof(arr_code));
+        if (!has_dep && !has_arr) {
+            continue;
+        }
+
+        if (cJSON_IsNumber(last_seen_item)) {
+            last_seen = (int64_t)last_seen_item->valuedouble;
+        }
+
+        if (cJSON_IsString(flight_callsign_item) && flight_callsign_item->valuestring && callsign && callsign[0]) {
+            char tmp_callsign[16];
+            snprintf(tmp_callsign, sizeof(tmp_callsign), "%s", flight_callsign_item->valuestring);
+            trim_spaces(tmp_callsign);
+            callsign_match = (strcmp(tmp_callsign, callsign) == 0);
+        }
+
+        if (callsign_match && !prefer_callsign) {
+            prefer_callsign = true;
+            best_last_seen = -1;
+        }
+        if (prefer_callsign && !callsign_match) {
+            continue;
+        }
+
+        if (last_seen >= best_last_seen) {
+            best_last_seen = last_seen;
+            snprintf(best_departure, sizeof(best_departure), "%s", has_dep ? dep_code : "");
+            snprintf(best_arrival, sizeof(best_arrival), "%s", has_arr ? arr_code : "");
+        }
+    }
+
+    cJSON_Delete(root);
+
+    if (best_last_seen >= 0) {
+        snprintf(info->origin_airport, sizeof(info->origin_airport), "%s", best_departure);
+        snprintf(info->destination_airport, sizeof(info->destination_airport), "%s", best_arrival);
+    }
+}
+
+static void fill_from_adsbdb(const char *icao24, const char *callsign, aircraft_info_t *info)
+{
+    char *response = NULL;
+    cJSON *root = NULL;
+    cJSON *resp_obj = NULL;
+    char url[256];
+
+    if (icao24 == NULL || icao24[0] == '\0' || info == NULL) {
+        return;
+    }
+
+    if (s_enrichment_cache.valid &&
+        strcmp(s_enrichment_cache.icao24, icao24) == 0 &&
+        strcmp(s_enrichment_cache.callsign, (callsign != NULL) ? callsign : "") == 0) {
+        if (s_enrichment_cache.data.registration[0] != '\0') {
+            snprintf(info->registration, sizeof(info->registration), "%s", s_enrichment_cache.data.registration);
+        }
+        if (s_enrichment_cache.data.aircraft_type_code[0] != '\0') {
+            snprintf(info->aircraft_type_code, sizeof(info->aircraft_type_code), "%s", s_enrichment_cache.data.aircraft_type_code);
+        }
+        if (s_enrichment_cache.data.aircraft_type_name[0] != '\0') {
+            snprintf(info->aircraft_type_name, sizeof(info->aircraft_type_name), "%s", s_enrichment_cache.data.aircraft_type_name);
+        }
+        if (s_enrichment_cache.data.origin_airport[0] != '\0') {
+            snprintf(info->origin_airport, sizeof(info->origin_airport), "%s", s_enrichment_cache.data.origin_airport);
+        }
+        if (s_enrichment_cache.data.destination_airport[0] != '\0') {
+            snprintf(info->destination_airport, sizeof(info->destination_airport), "%s", s_enrichment_cache.data.destination_airport);
+        }
+        return;
+    }
+
+    response = calloc(1, ADSBDB_RESP_BUF_SIZE);
+    if (response == NULL) {
+        return;
+    }
+
+    if (callsign != NULL && callsign[0] != '\0' && strcmp(callsign, "N/A") != 0) {
+        snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/aircraft/%s?callsign=%s", icao24, callsign);
+    } else {
+        snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/aircraft/%s", icao24);
+    }
+
+    if (http_get_json(url, response, ADSBDB_RESP_BUF_SIZE) != ESP_OK) {
+        free(response);
+        return;
+    }
+
+    root = cJSON_Parse(response);
+    free(response);
+    response = NULL;
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    resp_obj = cJSON_GetObjectItem(root, "response");
+    if (cJSON_IsObject(resp_obj)) {
+        cJSON *aircraft = cJSON_GetObjectItem(resp_obj, "aircraft");
+        cJSON *flightroute = cJSON_GetObjectItem(resp_obj, "flightroute");
+
+        if (cJSON_IsObject(aircraft)) {
+            copy_json_string(aircraft, "registration", info->registration, sizeof(info->registration));
+            copy_json_string(aircraft, "icao_type", info->aircraft_type_code, sizeof(info->aircraft_type_code));
+            copy_json_string(aircraft, "type", info->aircraft_type_name, sizeof(info->aircraft_type_name));
+        }
+
+        if (cJSON_IsObject(flightroute)) {
+            cJSON *origin = cJSON_GetObjectItem(flightroute, "origin");
+            cJSON *destination = cJSON_GetObjectItem(flightroute, "destination");
+
+            if (cJSON_IsObject(origin)) {
+                copy_json_string(origin, "iata_code", info->origin_airport, sizeof(info->origin_airport));
+                if (info->origin_airport[0] == '\0') {
+                    copy_json_string(origin, "icao_code", info->origin_airport, sizeof(info->origin_airport));
+                }
+            }
+            if (cJSON_IsObject(destination)) {
+                copy_json_string(destination, "iata_code", info->destination_airport, sizeof(info->destination_airport));
+                if (info->destination_airport[0] == '\0') {
+                    copy_json_string(destination, "icao_code", info->destination_airport, sizeof(info->destination_airport));
+                }
+            }
+        }
+    }
+
+    cJSON_Delete(root);
+
+    memset(&s_enrichment_cache, 0, sizeof(s_enrichment_cache));
+    s_enrichment_cache.valid = true;
+    snprintf(s_enrichment_cache.icao24, sizeof(s_enrichment_cache.icao24), "%s", icao24);
+    snprintf(s_enrichment_cache.callsign, sizeof(s_enrichment_cache.callsign), "%s", (callsign != NULL) ? callsign : "");
+    s_enrichment_cache.data = *info;
+}
+
 esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
 {
     char *response = NULL;
@@ -264,6 +569,8 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
     float best_dist = 1000000.0f;
     bool found = false;
     aircraft_info_t best = {0};
+    char best_icao24[16] = {0};
+    int64_t states_time_unix = 0;
 
     if (out_info == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -289,6 +596,12 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
     }
 
     states = cJSON_GetObjectItem(root, "states");
+    {
+        cJSON *time_item = cJSON_GetObjectItem(root, "time");
+        if (cJSON_IsNumber(time_item)) {
+            states_time_unix = (int64_t)time_item->valuedouble;
+        }
+    }
     if (!cJSON_IsArray(states)) {
         cJSON_Delete(root);
         return ESP_ERR_NOT_FOUND;
@@ -296,6 +609,7 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
 
     for (i = 0; i < (size_t)cJSON_GetArraySize(states); i++) {
         cJSON *state = cJSON_GetArrayItem(states, (int)i);
+        cJSON *icao24_item;
         cJSON *callsign_item;
         cJSON *lon_item;
         cJSON *lat_item;
@@ -310,11 +624,13 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
         int heading = -1;
         int altitude = -1;
         char callsign[16] = "N/A";
+        char icao24[16] = {0};
 
         if (!cJSON_IsArray(state) || cJSON_GetArraySize(state) < 14) {
             continue;
         }
 
+        icao24_item = cJSON_GetArrayItem(state, 0);
         callsign_item = cJSON_GetArrayItem(state, 1);
         lon_item = cJSON_GetArrayItem(state, 5);
         lat_item = cJSON_GetArrayItem(state, 6);
@@ -353,6 +669,10 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
                 snprintf(callsign, sizeof(callsign), "N/A");
             }
         }
+        if (cJSON_IsString(icao24_item) && icao24_item->valuestring != NULL) {
+            snprintf(icao24, sizeof(icao24), "%s", icao24_item->valuestring);
+            trim_spaces(icao24);
+        }
 
         dist = haversine_km(home_lat, home_lon, lat, lon);
         if (dist < best_dist) {
@@ -363,6 +683,7 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
             best.altitude_m = altitude;
             best.heading_deg = heading;
             snprintf(best.callsign, sizeof(best.callsign), "%s", callsign);
+            snprintf(best_icao24, sizeof(best_icao24), "%s", icao24);
             found = true;
         }
     }
@@ -371,6 +692,11 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
 
     if (!found) {
         return ESP_ERR_NOT_FOUND;
+    }
+
+    fill_from_adsbdb(best_icao24, best.callsign, &best);
+    if (best.origin_airport[0] == '\0' && best.destination_airport[0] == '\0') {
+        fill_route_from_recent_flights(best_icao24, best.callsign, states_time_unix, &best);
     }
 
     *out_info = best;
