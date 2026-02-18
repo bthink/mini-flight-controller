@@ -128,6 +128,8 @@ static esp_err_t http_get_oauth_token(char *token_out, size_t token_out_size)
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (client == NULL) {
+        free(response);
+        free(post_body);
         return ESP_FAIL;
     }
 
