@@ -25,16 +25,14 @@ static lv_obj_t *status_label = NULL; // Label for WiFi status
 static SemaphoreHandle_t s_aircraft_mutex = NULL;
 static aircraft_info_t s_latest_aircraft = {0};
 static bool s_aircraft_data_ready = false;
+static bool s_led_aircraft_visible = false;
 
 #define LVGL_DRAW_BUF_LINES 40
 
-// Demo counter for RGB LED effects
-// static uint32_t demo_counter = 0; // Currently unused
-
 // Function declarations
-static void rgb_led_demo_task(void *pvParameters);
 static void aircraft_tracker_task(void *pvParameters);
 static void update_display_status(void);
+static void update_aircraft_led(bool should_be_on);
 
 // ST7789 initialization commands
 typedef struct {
@@ -94,60 +92,6 @@ static void st7789_send_init_commands(esp_lcd_panel_io_handle_t io_handle)
     }
 }
 
-static void rgb_led_demo_task(void *pvParameters)
-{
-    ESP_LOGI(TAG, "RGB LED demo task started");
-    
-    // Check if RGB LED is available
-    if (!rgb_led_is_initialized()) {
-        ESP_LOGW(TAG, "RGB LED not initialized, demo task exiting");
-        vTaskDelete(NULL);
-        return;
-    }
-    
-    const rgb_led_mode_t demo_modes[] = {
-        RGB_MODE_RAINBOW,
-        RGB_MODE_BLINK, 
-        RGB_MODE_BREATHE,
-        RGB_MODE_FLIGHT_STATUS
-    };
-    
-    const uint32_t demo_periods[] = {
-        100,  // Rainbow - fast
-        500,  // Blink - medium
-        150,  // Breathe - slow breathing
-        800   // Flight status - slower
-    };
-    
-    const char* mode_names[] = {
-        "Rainbow",
-        "Blink",
-        "Breathe", 
-        "Flight Status"
-    };
-    
-    uint8_t mode_index = 0;
-    const uint8_t num_modes = sizeof(demo_modes) / sizeof(demo_modes[0]);
-    
-    while (1) {
-        ESP_LOGI(TAG, "RGB LED Demo: %s mode for 10 seconds", mode_names[mode_index]);
-        
-        // Set current mode (function handles null checks internally)
-        esp_err_t ret = rgb_led_set_mode(demo_modes[mode_index], demo_periods[mode_index]);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "RGB LED not available, demo task exiting");
-            vTaskDelete(NULL); // Delete this task
-            return;
-        }
-        
-        // Wait 10 seconds
-        vTaskDelay(pdMS_TO_TICKS(10000));
-        
-        // Move to next mode
-        mode_index = (mode_index + 1) % num_modes;
-    }
-}
-
 static void aircraft_tracker_task(void *pvParameters)
 {
     while (1) {
@@ -170,6 +114,21 @@ static void aircraft_tracker_task(void *pvParameters)
         }
         vTaskDelay(pdMS_TO_TICKS(TRACKER_REFRESH_SEC * 1000));
     }
+}
+
+static void update_aircraft_led(bool should_be_on)
+{
+    if (!rgb_led_is_initialized() || should_be_on == s_led_aircraft_visible) {
+        return;
+    }
+
+    if (should_be_on) {
+        rgb_led_set_color((rgb_color_t)RGB_GREEN);
+    } else {
+        rgb_led_off();
+    }
+
+    s_led_aircraft_visible = should_be_on;
 }
 
 static void update_display_status(void)
@@ -222,6 +181,14 @@ static void update_display_status(void)
             break;
     }
     
+    const bool aircraft_visible = (
+        wifi_status == WIFI_STATUS_CONNECTED &&
+        aircraft_ready &&
+        aircraft.valid
+    );
+
+    update_aircraft_led(aircraft_visible);
+
     lv_label_set_text(status_label, status_text);
 }
 
@@ -312,10 +279,13 @@ void app_main(void)
     disp_drv.user_data = panel_handle;
     lv_disp_drv_register(&disp_drv);
 
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_COVER, LV_PART_MAIN);
+
     // Create a label for status display
     status_label = lv_label_create(lv_scr_act());
     lv_label_set_text(status_label, "WiFi: Connecting...\nAircraft: waiting");
-    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(status_label, lv_color_white(), 0);
     lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(status_label);
@@ -345,12 +315,7 @@ void app_main(void)
     esp_err_t rgb_ret = rgb_led_init();
     if (rgb_ret == ESP_OK) {
         ESP_LOGI(TAG, "RGB LED initialized successfully");
-        
-        // Start with rainbow effect
-        rgb_led_set_mode(RGB_MODE_RAINBOW, 100);
-        
-        // Create a task for LED demo
-        xTaskCreate(rgb_led_demo_task, "rgb_demo", 4096, NULL, 3, NULL);
+        rgb_led_off();
     } else {
         ESP_LOGE(TAG, "RGB LED initialization failed: %s", esp_err_to_name(rgb_ret));
         ESP_LOGW(TAG, "Continuing without RGB LED functionality");
