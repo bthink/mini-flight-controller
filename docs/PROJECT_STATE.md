@@ -7,7 +7,7 @@
 - Device boots, initializes LCD + LVGL + WiFi.
 - After WiFi connect, tracker fetches aircraft data from OpenSky.
 - LCD shows:
-  - WiFi status/IP/RSSI
+  - WiFi status
   - nearest aircraft callsign, distance, altitude, heading
   - or `Aircraft: no data` when nothing is available.
 

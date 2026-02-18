@@ -177,8 +177,6 @@ static void update_display_status(void)
     if (status_label == NULL) return;
     
     char status_text[256];
-    char ip_str[16];
-    int8_t rssi;
     aircraft_info_t aircraft = {0};
     bool aircraft_ready = false;
     
@@ -192,18 +190,7 @@ static void update_display_status(void)
     
     switch (wifi_status) {
         case WIFI_STATUS_CONNECTED:
-            if (wifi_manager_get_info(ip_str, &rssi) == ESP_OK) {
-                snprintf(status_text, sizeof(status_text), 
-                         "FLIGHT CONTROLLER\n"
-                         "WiFi: Connected\n"
-                         "IP: %s\n"
-                         "RSSI: %d dBm\n", 
-                         ip_str, rssi);
-            } else {
-                snprintf(status_text, sizeof(status_text), 
-                         "FLIGHT CONTROLLER\n"
-                         "WiFi: Connected\n");
-            }
+            snprintf(status_text, sizeof(status_text), "WiFi: Connected\n");
             if (aircraft_ready && aircraft.valid) {
                 snprintf(status_text + strlen(status_text), sizeof(status_text) - strlen(status_text),
                          "Aircraft: %s\n"
@@ -220,19 +207,16 @@ static void update_display_status(void)
             break;
         case WIFI_STATUS_CONNECTING:
             snprintf(status_text, sizeof(status_text), 
-                     "FLIGHT CONTROLLER\n"
                      "WiFi: Connecting...\n"
                      "Aircraft: waiting");
             break;
         case WIFI_STATUS_FAILED:
             snprintf(status_text, sizeof(status_text), 
-                     "FLIGHT CONTROLLER\n"
                      "WiFi: Failed to connect\n"
                      "Aircraft: unavailable");
             break;
         default:
             snprintf(status_text, sizeof(status_text), 
-                     "FLIGHT CONTROLLER\n"
                      "WiFi: Disconnected\n"
                      "Aircraft: unavailable");
             break;
@@ -330,7 +314,7 @@ void app_main(void)
 
     // Create a label for status display
     status_label = lv_label_create(lv_scr_act());
-    lv_label_set_text(status_label, "FLIGHT CONTROLLER\nInitializing...");
+    lv_label_set_text(status_label, "WiFi: Connecting...\nAircraft: waiting");
     lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(status_label, lv_color_white(), 0);
     lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
