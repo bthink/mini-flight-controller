@@ -22,6 +22,10 @@ static const char *TAG = "aircraft_tracker";
 #define ENRICHMENT_CACHE_TTL_SEC 300
 #define DEG_TO_RAD (0.01745329251994329576923690768489)
 
+#define OPENSKY_CATEGORY_LARGE 3
+#define OPENSKY_CATEGORY_HIGH_VORTEX_LARGE 4
+#define OPENSKY_CATEGORY_HEAVY 5
+
 typedef struct {
     char *buf;
     size_t len;
@@ -238,7 +242,7 @@ static esp_err_t http_get_states(char *out_json, size_t out_size)
     };
 
     snprintf(url, sizeof(url),
-             "https://opensky-network.org/api/states/all?lamin=%.6f&lomin=%.6f&lamax=%.6f&lomax=%.6f",
+             "https://opensky-network.org/api/states/all?lamin=%.6f&lomin=%.6f&lamax=%.6f&lomax=%.6f&extended=1",
              lat - lat_delta, lon - lon_delta, lat + lat_delta, lon + lon_delta);
 
     esp_http_client_config_t cfg = {
@@ -617,12 +621,14 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
         cJSON *geo_alt_item;
         cJSON *track_item;
         cJSON *on_ground_item;
+        cJSON *category_item;
         double lon;
         double lat;
         float dist;
         bool on_ground = false;
         int heading = -1;
         int altitude = -1;
+        int category = -1;
         char callsign[16] = "N/A";
         char icao24[16] = {0};
 
@@ -638,6 +644,7 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
         on_ground_item = cJSON_GetArrayItem(state, 8);
         track_item = cJSON_GetArrayItem(state, 10);
         geo_alt_item = cJSON_GetArrayItem(state, 13);
+        category_item = cJSON_GetArrayItem(state, 17);
 
         if (cJSON_IsBool(on_ground_item)) {
             on_ground = cJSON_IsTrue(on_ground_item);
@@ -661,6 +668,9 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
         } else if (cJSON_IsNumber(baro_alt_item)) {
             altitude = (int)lround(baro_alt_item->valuedouble);
         }
+        if (cJSON_IsNumber(category_item)) {
+            category = (int)lround(category_item->valuedouble);
+        }
 
         if (cJSON_IsString(callsign_item) && callsign_item->valuestring != NULL) {
             snprintf(callsign, sizeof(callsign), "%s", callsign_item->valuestring);
@@ -682,6 +692,11 @@ esp_err_t aircraft_tracker_fetch_nearest(aircraft_info_t *out_info)
             best.distance_km = dist;
             best.altitude_m = altitude;
             best.heading_deg = heading;
+            best.is_large_or_heavy = (
+                category == OPENSKY_CATEGORY_LARGE ||
+                category == OPENSKY_CATEGORY_HIGH_VORTEX_LARGE ||
+                category == OPENSKY_CATEGORY_HEAVY
+            );
             snprintf(best.callsign, sizeof(best.callsign), "%s", callsign);
             snprintf(best_icao24, sizeof(best_icao24), "%s", icao24);
             found = true;

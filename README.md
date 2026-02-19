@@ -108,7 +108,8 @@ Najważniejsze:
 ## Zachowanie LED/backlight
 
 - RGB LED:
-  - `ON` (zielony), gdy wykryto samolot
+  - `ON` (czerwony), gdy wykryto samolot kategorii `Large/Heavy`
+  - `ON` (niebieski), gdy wykryto inny samolot
   - `OFF`, gdy brak samolotu
 - Podświetlenie LCD:
   - ~`20%` gdy brak samolotu

@@ -6,6 +6,7 @@
 
 typedef struct {
     bool valid;
+    bool is_large_or_heavy;
     char callsign[16];
     char registration[16];
     char aircraft_type_code[16];

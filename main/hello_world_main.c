@@ -27,6 +27,7 @@ static SemaphoreHandle_t s_aircraft_mutex = NULL;
 static aircraft_info_t s_latest_aircraft = {0};
 static bool s_aircraft_data_ready = false;
 static bool s_led_aircraft_visible = false;
+static rgb_color_t s_led_aircraft_color = RGB_OFF;
 static uint8_t s_backlight_percent = 255;
 
 #define LVGL_DRAW_BUF_LINES 40
@@ -41,7 +42,7 @@ static uint8_t s_backlight_percent = 255;
 // Function declarations
 static void aircraft_tracker_task(void *pvParameters);
 static void update_display_status(void);
-static void update_aircraft_led(bool should_be_on);
+static void update_aircraft_led(bool should_be_on, bool is_large_or_heavy);
 static void set_backlight_percent(uint8_t percent);
 
 // ST7789 initialization commands
@@ -126,19 +127,33 @@ static void aircraft_tracker_task(void *pvParameters)
     }
 }
 
-static void update_aircraft_led(bool should_be_on)
+static bool rgb_color_equal(rgb_color_t a, rgb_color_t b)
 {
-    if (!rgb_led_is_initialized() || should_be_on == s_led_aircraft_visible) {
+    return a.red == b.red && a.green == b.green && a.blue == b.blue;
+}
+
+static void update_aircraft_led(bool should_be_on, bool is_large_or_heavy)
+{
+    rgb_color_t target_color;
+
+    if (!rgb_led_is_initialized()) {
+        return;
+    }
+
+    target_color = should_be_on ? (is_large_or_heavy ? (rgb_color_t)RGB_RED : (rgb_color_t)RGB_BLUE) : (rgb_color_t)RGB_OFF;
+
+    if (s_led_aircraft_visible == should_be_on && rgb_color_equal(s_led_aircraft_color, target_color)) {
         return;
     }
 
     if (should_be_on) {
-        rgb_led_set_color((rgb_color_t)RGB_GREEN);
+        rgb_led_set_color(target_color);
     } else {
         rgb_led_off();
     }
 
     s_led_aircraft_visible = should_be_on;
+    s_led_aircraft_color = target_color;
 }
 
 static void set_backlight_percent(uint8_t percent)
@@ -239,7 +254,7 @@ static void update_display_status(void)
         aircraft.valid
     );
 
-    update_aircraft_led(aircraft_visible);
+    update_aircraft_led(aircraft_visible, aircraft.is_large_or_heavy);
     set_backlight_percent(aircraft_visible ? LCD_BACKLIGHT_PERCENT_ACTIVE : LCD_BACKLIGHT_PERCENT_IDLE);
 
     lv_label_set_text(status_label, status_text);
