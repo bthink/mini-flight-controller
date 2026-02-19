@@ -19,6 +19,7 @@ static TaskHandle_t rgb_task_handle = NULL;
 static rgb_led_mode_t current_mode = RGB_MODE_STATIC;
 static uint32_t animation_period = 1000;
 static SemaphoreHandle_t rgb_mutex = NULL;
+static const uint8_t RGB_BRIGHTNESS_PERCENT = 30;
 
 // Private function declarations
 static void rgb_led_task(void *pvParameters);
@@ -87,7 +88,12 @@ esp_err_t rgb_led_set_color(rgb_color_t color)
     }
     
     if (xSemaphoreTake(rgb_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        esp_err_t ret = led_strip_set_pixel(led_strip, 0, color.red, color.green, color.blue);
+        rgb_color_t scaled_color = {
+            .red = (uint8_t)((color.red * RGB_BRIGHTNESS_PERCENT) / 100),
+            .green = (uint8_t)((color.green * RGB_BRIGHTNESS_PERCENT) / 100),
+            .blue = (uint8_t)((color.blue * RGB_BRIGHTNESS_PERCENT) / 100)
+        };
+        esp_err_t ret = led_strip_set_pixel(led_strip, 0, scaled_color.red, scaled_color.green, scaled_color.blue);
         if (ret == ESP_OK) {
             ret = led_strip_refresh(led_strip);
         }
