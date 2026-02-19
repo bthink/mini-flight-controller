@@ -62,7 +62,7 @@
 
 ## Run / Flash Quickstart
 ```bash
-cd /Users/bartoszfink/dzikieProjekty/mini-flight-controller
+cd /path/to/mini-flight-controller
 . ~/esp/esp-idf/export.sh
 idf.py -p /dev/cu.usbmodem101 flash
 idf.py -p /dev/cu.usbmodem101 monitor
