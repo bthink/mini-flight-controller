@@ -107,6 +107,31 @@ static void trim_spaces(char *str)
     }
 }
 
+static bool is_iata_code(const char *code)
+{
+    size_t i;
+    if (code == NULL || strlen(code) != 3) {
+        return false;
+    }
+    for (i = 0; i < 3; i++) {
+        if (!isalpha((unsigned char)code[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void uppercase_iata(char *code)
+{
+    size_t i;
+    if (code == NULL) {
+        return;
+    }
+    for (i = 0; i < 3 && code[i] != '\0'; i++) {
+        code[i] = (char)toupper((unsigned char)code[i]);
+    }
+}
+
 static void copy_json_string(cJSON *obj, const char *key, char *out, size_t out_size)
 {
     cJSON *item;
@@ -372,7 +397,11 @@ static bool airport_or_empty(cJSON *item, char *out, size_t out_size)
 {
     if (cJSON_IsString(item) && item->valuestring != NULL) {
         snprintf(out, out_size, "%s", item->valuestring);
-        return out[0] != '\0';
+        trim_spaces(out);
+        if (is_iata_code(out)) {
+            uppercase_iata(out);
+            return true;
+        }
     }
     out[0] = '\0';
     return false;
@@ -540,14 +569,20 @@ static void fill_from_adsbdb(const char *icao24, const char *callsign, aircraft_
 
             if (cJSON_IsObject(origin)) {
                 copy_json_string(origin, "iata_code", info->origin_airport, sizeof(info->origin_airport));
-                if (info->origin_airport[0] == '\0') {
-                    copy_json_string(origin, "icao_code", info->origin_airport, sizeof(info->origin_airport));
+                trim_spaces(info->origin_airport);
+                if (!is_iata_code(info->origin_airport)) {
+                    info->origin_airport[0] = '\0';
+                } else {
+                    uppercase_iata(info->origin_airport);
                 }
             }
             if (cJSON_IsObject(destination)) {
                 copy_json_string(destination, "iata_code", info->destination_airport, sizeof(info->destination_airport));
-                if (info->destination_airport[0] == '\0') {
-                    copy_json_string(destination, "icao_code", info->destination_airport, sizeof(info->destination_airport));
+                trim_spaces(info->destination_airport);
+                if (!is_iata_code(info->destination_airport)) {
+                    info->destination_airport[0] = '\0';
+                } else {
+                    uppercase_iata(info->destination_airport);
                 }
             }
         }

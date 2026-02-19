@@ -121,6 +121,7 @@ Najważniejsze:
 - `Type` i `Route` są wzbogacane best-effort:
   - najpierw z `api.adsbdb.com`,
   - fallback dla trasy z OpenSky `/api/flights/aircraft`.
+- `Route` jest prezentowana jako kody IATA (3 znaki); kody ICAO (4 znaki) są odrzucane.
 - Brak typu/trasy dla części lotów jest normalny (zależność od dostępności danych zewnętrznych).
 
 ## Najczęstsze problemy
